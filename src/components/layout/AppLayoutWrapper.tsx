@@ -1,10 +1,7 @@
-import Header from './Header';
-
 const AppLayoutWrapper = ({ children }: { children: React.ReactNode }) => {
   return (
-    <div>
-      <Header />
-      <main>{children}</main>
+    <div className="bg-gradient-to-b ">
+      <main className="container mx-auto px-4 py-2">{children}</main>
     </div>
   );
 };
