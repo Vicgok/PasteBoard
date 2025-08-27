@@ -2,9 +2,9 @@ import React, { useState } from "react";
 import { Eye, EyeOff, Mail, Lock, User } from "lucide-react";
 import GoogleLogo from "@/components/custom_ui/GoogleLogo";
 import { Link } from "react-router-dom";
-import { supabase } from "@/lib/supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { useAuth } from "@/hooks/useAuth";
 interface FormData {
   name: string;
   email: string;
@@ -23,7 +23,7 @@ interface FormErrors {
 
 const SignUp = () => {
   const navigate = useNavigate();
-
+  const { signUp, loading } = useAuth();
   const [formData, setFormData] = useState<FormData>({
     name: "",
     email: "",
@@ -35,7 +35,7 @@ const SignUp = () => {
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [showConfirmPassword, setShowConfirmPassword] =
     useState<boolean>(false);
-  const [loading, setLoading] = useState<boolean>(false);
+  // const [loading, setLoading] = useState<boolean>(false);
   const [errors, setErrors] = useState<FormErrors>({});
 
   const handleInputChange = (
@@ -76,17 +76,11 @@ const SignUp = () => {
     e.preventDefault();
     if (!validateForm()) return;
 
-    setLoading(true);
+    // setLoading(true);
     // Simulate API call
     try {
       const { email, password, name } = formData;
-      const { error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: { name },
-        },
-      });
+      const { error } = await signUp(email, password, name);
       if (!error) navigate("/dashboard");
       else
         toast.error(`${error["message"]}`, {
@@ -107,7 +101,7 @@ const SignUp = () => {
       console.log("Error in handleSubmit=>", error);
       alert("Something went wrong. Please try again.");
     } finally {
-      setLoading(false);
+      // setLoading(false);
     }
   };
 

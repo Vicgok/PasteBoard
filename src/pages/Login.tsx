@@ -1,7 +1,6 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Eye, EyeOff, Mail, Lock, User } from "lucide-react";
 import { Link } from "react-router-dom";
-import { supabase } from "@/lib/supabaseClient";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -14,6 +13,8 @@ import {
 } from "@/components/shadcn_ui/dialog";
 import ForgotPassword from "./ForgotPassword";
 import ResetPassword from "./ResetPassword";
+import { useAuth } from "@/hooks/useAuth";
+import { getDeviceInfo } from "@/lib/getDeviceInfo";
 
 interface LoginFormData {
   email: string;
@@ -27,17 +28,32 @@ interface LoginFormErrors {
 
 const Login = () => {
   const navigate = useNavigate();
-
+  const {
+    signInWithEmail,
+    signInWithGoogle,
+    loading: authLoading,
+    user,
+    session,
+  } = useAuth();
   const [formData, setFormData] = useState<LoginFormData>({
     email: "",
     password: "",
   });
 
   const [showPassword, setShowPassword] = useState<boolean>(false);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loginLoading, setLoginLoading] = useState<boolean>(false);
   const [errors, setErrors] = useState<LoginFormErrors>({});
   const [showForgot, setShowForgot] = useState(false);
   const [showReset, setShowReset] = useState(false);
+
+  // Redirect if user is already authenticated
+  useEffect(() => {
+    const uaData = getDeviceInfo();
+    console.log(uaData);
+    if (!authLoading && user && session) {
+      navigate("/dashboard");
+    }
+  }, [authLoading, user, session, navigate]);
 
   const handleInputChange = (
     field: keyof LoginFormData,
@@ -67,21 +83,25 @@ const Login = () => {
     if (e) e.preventDefault();
     if (!validateForm()) return;
 
-    setLoading(true);
-    // Simulate API call
+    // Prevent login if auth is still loading
+    if (authLoading) {
+      toast.error("Please wait, checking existing session...");
+      return;
+    }
+
+    setLoginLoading(true);
     try {
       const { email, password } = formData;
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (!error) navigate("/dashboard");
-      else
-        toast.error(`${error["message"]}`, {
-          description: `incorrect email or password`,
+      const { error } = await signInWithEmail(email, password);
+      if (!error) {
+        navigate("/dashboard");
+      } else {
+        toast.error(`${error.message}`, {
+          description: `Incorrect email or password`,
           position: "top-center",
           richColors: true,
         });
+      }
       // Reset form
       setFormData({
         email: "",
@@ -89,15 +109,47 @@ const Login = () => {
       });
     } catch (error) {
       console.log("Error in handleEmailLogin=>", error);
-      alert("Invalid credentials. Please try again.");
+      toast.error("Invalid credentials. Please try again.");
     } finally {
-      setLoading(false);
+      setLoginLoading(false);
     }
   };
 
-  const handleGoogleLogin = (): void => {
-    alert("Google login would be integrated here");
+  const handleGoogleLogin = async (): Promise<void> => {
+    // Prevent login if auth is still loading
+    if (authLoading) {
+      toast.error("Please wait, checking existing session...");
+      return;
+    }
+
+    setLoginLoading(true);
+    try {
+      const { error } = await signInWithGoogle();
+      if (!error) {
+        navigate("/dashboard");
+      } else {
+        toast.error(`${error.message}`, {
+          description: `Google SignIn failed`,
+          position: "top-center",
+          richColors: true,
+        });
+      }
+    } finally {
+      setLoginLoading(false);
+    }
   };
+
+  // Show loading screen while checking existing session
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="flex flex-col items-center space-y-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+          <p className="text-gray-600">Checking existing session...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -230,10 +282,10 @@ const Login = () => {
               {/* Login Button */}
               <button
                 onClick={handleEmailLogin}
-                disabled={loading}
+                disabled={loginLoading || authLoading}
                 className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-3 rounded-xl font-semibold hover:from-blue-700 hover:to-purple-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 transform hover:scale-[1.02] cursor-pointer"
               >
-                {loading ? (
+                {loginLoading ? (
                   <div className="flex items-center justify-center">
                     <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
                     Signing in...
@@ -253,7 +305,8 @@ const Login = () => {
               {/* Google Login */}
               <button
                 onClick={handleGoogleLogin}
-                className="w-full border border-gray-200 py-3 rounded-xl flex items-center justify-center space-x-2 hover:bg-gray-50 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-all duration-200 font-medium text-gray-700 cursor-pointer"
+                disabled={loginLoading || authLoading}
+                className="w-full border border-gray-200 py-3 rounded-xl flex items-center justify-center space-x-2 hover:bg-gray-50 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-all duration-200 font-medium text-gray-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <GoogleLogo />
                 <span>Continue with Google</span>
@@ -303,4 +356,5 @@ const Login = () => {
     </div>
   );
 };
+
 export default Login;

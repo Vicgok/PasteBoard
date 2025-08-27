@@ -2,113 +2,331 @@ import React, { useState, useEffect } from "react";
 import {
   Clipboard,
   Trash2,
-  FileText,
   Search,
-  Link,
   Copy,
   Check,
   X,
-  Save,
+  Code,
+  Globe,
+  Type,
+  Hash,
 } from "lucide-react";
 import { Button } from "../shadcn_ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../shadcn_ui/card";
 import { Textarea } from "../shadcn_ui/textarea";
 import { Badge } from "../shadcn_ui/badge";
 import { toast } from "sonner";
+import { supabase } from "@/lib/supabaseClient";
 
 interface ClipboardItem {
   id: string;
   content: string;
-  timestamp: Date;
-  device: string;
-  type: "text" | "code" | "url" | "other";
+  created_at: Date;
+  device_name: string;
+  content_type: "text" | "code" | "url" | "other";
 }
 
-interface Note {
-  id: string;
-  title: string;
-  content: string;
-  timestamp: Date;
-  tags: string[];
+interface ActiveClipBoardProps {
+  onClipboardUpdate?: () => void; // Callback to notify parent of clipboard updates
 }
 
-interface ShareableLink {
-  id: string;
-  url: string;
-  content: string;
-  expiresAt: Date;
-  views: number;
-}
-
-const ActiveClipBoard: React.FC = () => {
+const ActiveClipBoard: React.FC<ActiveClipBoardProps> = ({
+  onClipboardUpdate,
+}) => {
   // State Management
   const [clipboardContent, setClipboardContent] = useState<string>("");
-  const [isLive, setIsLive] = useState<boolean>(true);
+  const [selectedType, setSelectedType] = useState<
+    "text" | "code" | "url" | "other"
+  >("text");
+  // const [isLive, setIsLive] = useState<boolean>(true);
   const [copySuccess, setCopySuccess] = useState<boolean>(false);
   const [pasteSuccess, setPasteSuccess] = useState<boolean>(false);
-  const [loading, setLoading] = useState<boolean>(false);
+  // const [loading, setLoading] = useState<boolean>(false);
+  const [userId, setUserId] = useState<string | null>(null);
 
   // Quick Actions State
-  const [showShareDialog, setShowShareDialog] = useState<boolean>(false);
-  const [showNoteDialog, setShowNoteDialog] = useState<boolean>(false);
   const [showSearchDialog, setShowSearchDialog] = useState<boolean>(false);
-  const [shareableLink, setShareableLink] = useState<string>("");
-  const [noteTitle, setNoteTitle] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
-  // Mock Data (In real app, this would come from API/Context)
-  const [clipboardHistory, setClipboardHistory] = useState<ClipboardItem[]>([
-    {
-      id: "1",
-      content: 'console.log("Hello World");',
-      timestamp: new Date(Date.now() - 3600000),
-      device: "MacBook Pro",
-      type: "code",
-    },
-    {
-      id: "2",
-      content: "https://github.com/pasteboard/app",
-      timestamp: new Date(Date.now() - 7200000),
-      device: "iPhone 15",
-      type: "url",
-    },
-  ]);
+  // Data State
+  const [clipboardHistory, setClipboardHistory] = useState<ClipboardItem[]>([]);
 
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [sharedLinks, setSharedLinks] = useState<ShareableLink[]>([]);
+  // Content type options
+  const contentTypes = [
+    { value: "text", label: "Text", icon: Type, color: "text-gray-500" },
+    { value: "code", label: "Code", icon: Code, color: "text-blue-500" },
+    { value: "url", label: "URL", icon: Globe, color: "text-green-500" },
+    { value: "other", label: "Other", icon: Hash, color: "text-purple-500" },
+  ] as const;
 
-  // Simulate real-time clipboard sync
+  const initialized = React.useRef(false);
+  // Initialize user and fetch data
   useEffect(() => {
-    if (isLive) {
-      const interval = setInterval(() => {
-        // Simulate receiving clipboard content from other devices
-        // In real implementation, this would be WebSocket/Server-Sent Events
-      }, 5000);
-      return () => clearInterval(interval);
+    const initializeUser = async () => {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (user) {
+          console.log("User authenticated:", user.id);
+          setUserId(user.id);
+          await fetchClipboardHistory(user.id);
+        } else {
+          console.log("No user found");
+          setUserId(null);
+        }
+      } catch (error) {
+        console.error("Error getting user:", error);
+        toast.error("Authentication error");
+      }
+    };
+    if (!initialized.current) {
+      initialized.current = true;
+      initializeUser();
     }
-  }, [isLive]);
+  }, []);
+
+  // Auto-detect content type
+  useEffect(() => {
+    if (clipboardContent) {
+      const detectedType = detectContentType(clipboardContent);
+      setSelectedType(detectedType);
+    }
+  }, [clipboardContent]);
+
+  useEffect(() => {
+    if (!userId) return;
+    fetchClipboardHistory(userId);
+    const channel = supabase
+      .channel("clipboard_entries")
+      .on(
+        "postgres_changes",
+        {
+          event: "*", // listen to INSERT, UPDATE, DELETE
+          schema: "public",
+          table: "clipboard_entries",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          console.log("Realtime change received:", payload);
+          fetchClipboardHistory(userId); // re-fetch data
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userId]);
+  // Supabase Functions
+  const fetchClipboardHistory = async (userId: string): Promise<void> => {
+    try {
+      console.log("Fetching clipboard history for user:", userId);
+
+      const { data, error } = await supabase
+        .from("clipboard_entries")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (error) {
+        console.error("Supabase error:", error);
+        throw error;
+      }
+
+      console.log("Fetched clipboard data:", data);
+
+      const formattedHistory =
+        data?.map((item) => ({
+          id: item.id,
+          content: item.content,
+          created_at: new Date(item.created_at),
+          device_name: item.device_name || "Unknown Device",
+          content_type: item.content_type as "text" | "code" | "url" | "other",
+        })) || [];
+
+      setClipboardHistory(formattedHistory);
+    } catch (error) {
+      console.error("Error fetching clipboard history:", error);
+      toast.error("Failed to load clipboard history");
+    }
+  };
+
+  const saveClipboardEntry = async (
+    content: string,
+    contentType: string
+  ): Promise<boolean> => {
+    if (!userId) {
+      console.error("No userId found when saving clipboard entry");
+      toast.error("User not authenticated");
+      return false;
+    }
+
+    try {
+      console.log("Saving clipboard entry:", {
+        userId,
+        content: content.substring(0, 50),
+        contentType,
+      });
+
+      // Detect device name
+      const deviceName = navigator.userAgent.includes("Mobile")
+        ? "Mobile Device"
+        : "Desktop";
+
+      const { data, error } = await supabase
+        .from("clipboard_entries")
+        .insert([
+          {
+            user_id: userId,
+            content: content,
+            content_type: contentType,
+            device_name: deviceName,
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Supabase insert error:", error);
+        throw error;
+      }
+
+      console.log("Successfully saved clipboard entry:", data);
+
+      // Add to local state
+      const newItem: ClipboardItem = {
+        id: data.id,
+        content: data.content,
+        created_at: new Date(data.created_at),
+        device_name: data.device_name,
+        content_type: data.content_type,
+      };
+
+      setClipboardHistory((prev) => [newItem, ...prev.slice(0, 49)]);
+
+      // Notify parent component
+      if (onClipboardUpdate) {
+        onClipboardUpdate();
+      }
+
+      return true;
+    } catch (error) {
+      console.error("Error saving clipboard entry:", error);
+      toast.error("Failed to save clipboard entry");
+      return false;
+    }
+  };
+
+  // const saveNote = async (
+  //   title: string,
+  //   content: string,
+  //   tags: string[]
+  // ): Promise<void> => {
+  //   if (!userId) {
+  //     toast.error("User not authenticated");
+  //     return;
+  //   }
+
+  //   try {
+  //     const { data, error } = await supabase
+  //       .from("notes")
+  //       .insert([
+  //         {
+  //           user_id: userId,
+  //           title: title,
+  //           content: content,
+  //           tags: tags,
+  //         },
+  //       ])
+  //       .select()
+  //       .single();
+
+  //     if (error) throw error;
+
+  //     const newNote: Note = {
+  //       id: data.id,
+  //       title: data.title,
+  //       content: data.content,
+  //       created_at: new Date(data.created_at),
+  //       tags: data.tags || [],
+  //     };
+
+  //     setNotes((prev) => [newNote, ...prev]);
+  //     toast.success("Note saved successfully!");
+  //   } catch (error) {
+  //     console.error("Error saving note:", error);
+  //     toast.error("Failed to save note");
+  //   }
+  // };
+
+  // const createSharedLink = async (content: string): Promise<string> => {
+  //   if (!userId) {
+  //     throw new Error("User not authenticated");
+  //   }
+
+  //   const shareId = Math.random().toString(36).substr(2, 9);
+  //   const shareUrl = `https://pasteboard.app/share/${shareId}`;
+  //   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+  //   const { data, error } = await supabase
+  //     .from("shared_links")
+  //     .insert([
+  //       {
+  //         user_id: userId,
+  //         share_id: shareId,
+  //         url: shareUrl,
+  //         content: content,
+  //         expires_at: expiresAt.toISOString(),
+  //       },
+  //     ])
+  //     .select()
+  //     .single();
+
+  //   if (error) throw error;
+
+  //   const newSharedLink: ShareableLink = {
+  //     id: data.id,
+  //     share_id: data.share_id,
+  //     url: data.url,
+  //     content: data.content,
+  //     expires_at: new Date(data.expires_at),
+  //     views: data.views,
+  //   };
+
+  //   setSharedLinks((prev) => [newSharedLink, ...prev]);
+  //   return shareUrl;
+  // };
 
   // Core Clipboard Functions
   const handleCopy = async (): Promise<void> => {
-    if (!clipboardContent.trim()) return;
+    if (!clipboardContent.trim()) {
+      toast.error("No content to copy");
+      return;
+    }
 
     try {
+      // First copy to system clipboard
       await navigator.clipboard.writeText(clipboardContent);
       setCopySuccess(true);
 
-      // Add to clipboard history
-      const newItem: ClipboardItem = {
-        id: Date.now().toString(),
-        content: clipboardContent,
-        timestamp: new Date(),
-        device: "Current Device",
-        type: detectContentType(clipboardContent),
-      };
-      setClipboardHistory((prev) => [newItem, ...prev.slice(0, 49)]); // Keep last 50 items
+      console.log("Content copied to clipboard, now saving to database...");
+
+      // Then save to Supabase
+      const saved = await saveClipboardEntry(clipboardContent, selectedType);
+
+      if (saved) {
+        toast.success("Copied and saved to history!");
+      } else {
+        toast.success("Copied to clipboard (but not saved to history)");
+      }
 
       setTimeout(() => setCopySuccess(false), 2000);
     } catch (error) {
       console.error("Failed to copy to clipboard:", error);
+      toast.error("Failed to copy to clipboard");
     }
   };
 
@@ -120,6 +338,7 @@ const ActiveClipBoard: React.FC = () => {
       setTimeout(() => setPasteSuccess(false), 2000);
     } catch (error) {
       console.error("Failed to paste from clipboard:", error);
+      toast.error("Failed to paste from clipboard");
     }
   };
 
@@ -134,83 +353,62 @@ const ActiveClipBoard: React.FC = () => {
     if (
       content.match(/[{}();]/) ||
       content.includes("function") ||
-      content.includes("const ")
+      content.includes("const ") ||
+      content.includes("import ") ||
+      content.includes("class ") ||
+      content.includes("def ") ||
+      content.includes("<?php") ||
+      content.includes("<script")
     )
       return "code";
     return "text";
   };
 
   // Quick Actions Functions
-  const handleShareLink = async (): Promise<void> => {
-    if (!clipboardContent.trim()) {
-      toast.error("No content to share", {
-        position: "top-center",
-        richColors: true,
-      });
-      return;
-    }
+  // const handleShareLink = async (): Promise<void> => {
+  //   if (!clipboardContent.trim()) {
+  //     toast.error("No content to share");
+  //     return;
+  //   }
 
-    setLoading(true);
-    try {
-      // Simulate API call to create shareable link
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+  //   setLoading(true);
+  //   try {
+  //     const shareUrl = await createSharedLink(clipboardContent);
+  //     setShareableLink(shareUrl);
+  //     setShowShareDialog(true);
+  //   } catch (error) {
+  //     console.error("Error in handleShareLink:", error);
+  //     toast.error("Failed to create shareable link");
+  //   } finally {
+  //     setLoading(false);
+  //   }
+  // };
 
-      const linkId = Math.random().toString(36).substr(2, 9);
-      const shareUrl = `https://pasteboard.app/share/${linkId}`;
+  // const handleQuickNote = (): void => {
+  //   if (!clipboardContent.trim()) {
+  //     toast.error("No content to save as note");
+  //     return;
+  //   }
+  //   setNoteTitle(
+  //     clipboardContent.substring(0, 50) +
+  //       (clipboardContent.length > 50 ? "..." : "")
+  //   );
+  //   setShowNoteDialog(true);
+  // };
 
-      const newSharedLink: ShareableLink = {
-        id: linkId,
-        url: shareUrl,
-        content: clipboardContent,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-        views: 0,
-      };
+  // const handleSaveNote = async (): Promise<void> => {
+  //   if (!noteTitle.trim()) return;
 
-      setSharedLinks((prev) => [newSharedLink, ...prev]);
-      setShareableLink(shareUrl);
-      setShowShareDialog(true);
-    } catch (error) {
-      console.log("error in handleShareLink=>", error);
-      toast.error("Failed to create shareable link", {
-        position: "top-center",
-        richColors: true,
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+  //   const tags = noteTags
+  //     .split(",")
+  //     .map((tag) => tag.trim())
+  //     .filter((tag) => tag.length > 0);
 
-  const handleQuickNote = (): void => {
-    if (!clipboardContent.trim()) {
-      toast.error("No content to save as note", {
-        position: "top-center",
-        richColors: true,
-      });
-      return;
-    }
-    setNoteTitle(
-      clipboardContent.substring(0, 50) +
-        (clipboardContent.length > 50 ? "..." : "")
-    );
-    setShowNoteDialog(true);
-  };
-
-  const handleSaveNote = (): void => {
-    if (!noteTitle.trim()) return;
-
-    const newNote: Note = {
-      id: Date.now().toString(),
-      title: noteTitle,
-      content: clipboardContent,
-      timestamp: new Date(),
-      tags: [],
-    };
-
-    setNotes((prev) => [newNote, ...prev]);
-    setShowNoteDialog(false);
-    setNoteTitle("");
-    alert("Note saved successfully!");
-  };
+  //   await saveNote(noteTitle, clipboardContent, tags);
+  //   setShowNoteDialog(false);
+  //   setNoteTitle("");
+  //   setNoteTags("");
+  // };
 
   const handleSearch = (): void => {
     setShowSearchDialog(true);
@@ -220,17 +418,14 @@ const ActiveClipBoard: React.FC = () => {
     item.content.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const copyShareableLink = async (): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(shareableLink);
-      toast.success("Link copied to clipboard!", {
-        position: "top-center",
-        richColors: true,
-      });
-    } catch (error) {
-      console.error("Failed to copy link:", error);
-    }
-  };
+  // const copyShareableLink = async (): Promise<void> => {
+  //   try {
+  //     await navigator.clipboard.writeText(shareableLink);
+  //     toast.success("Link copied to clipboard!");
+  //   } catch (error) {
+  //     console.error("Failed to copy link:", error);
+  //   }
+  // };
 
   return (
     <>
@@ -238,19 +433,50 @@ const ActiveClipBoard: React.FC = () => {
       <Card className="shadow-lg rounded-2xl">
         <CardHeader className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2 text-xl">
-            <span
+            {/* <span
               className={`h-3 w-3 rounded-full ${
                 isLive ? "bg-blue-500 animate-pulse" : "bg-gray-400"
               }`}
-            />
+            /> */}
             Active Clipboard
           </CardTitle>
-          <Badge className="text-sm" variant={isLive ? "default" : "outline"}>
+          {/* <Badge className="text-sm" variant={isLive ? "default" : "outline"}>
             {isLive ? "Live" : "Offline"}
-          </Badge>
+          </Badge> */}
         </CardHeader>
 
-        <CardContent className="space-y-6">
+        <CardContent className="flex flex-col space-y-6 h-full">
+          {/* Content Type Selection */}
+          <div>
+            <label className="text-sm font-medium text-gray-700 mb-2 block">
+              Content Type
+            </label>
+            <div className="flex gap-2 flex-wrap">
+              {contentTypes.map((type) => {
+                const IconComponent = type.icon;
+                const isSelected = selectedType === type.value;
+                return (
+                  <button
+                    key={type.value}
+                    onClick={() => setSelectedType(type.value)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all ${
+                      isSelected
+                        ? "bg-blue-50 border-blue-200 text-blue-700"
+                        : "bg-white border-gray-200 text-gray-600 hover:bg-gray-50"
+                    }`}
+                  >
+                    <IconComponent
+                      className={`h-4 w-4 ${
+                        isSelected ? "text-blue-500" : type.color
+                      }`}
+                    />
+                    <span className="text-sm font-medium">{type.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <Textarea
             placeholder="Your clipboard content will appear here..."
             className="resize-none h-32 text-base"
@@ -262,7 +488,7 @@ const ActiveClipBoard: React.FC = () => {
             <Button
               className="flex-1 bg-gradient-to-r from-blue-500 to-indigo-500 text-white hover:from-blue-600 hover:to-indigo-600 h-12"
               onClick={handleCopy}
-              disabled={!clipboardContent.trim()}
+              disabled={!clipboardContent.trim() || !userId}
             >
               {copySuccess ? (
                 <Check className="h-5 w-5 mr-2" />
@@ -296,9 +522,21 @@ const ActiveClipBoard: React.FC = () => {
           </div>
 
           {/* Quick Actions */}
-          <div>
+          <div className="mt-auto">
+            <Card
+              className="p-4 flex flex-col items-center gap-0 justify-center text-center hover:shadow-lg cursor-pointer transition-all duration-200 hover:scale-105 border hover:border-pink-200"
+              onClick={handleSearch}
+            >
+              <Search className="h-5 w-5 mb-2 text-pink-500" />
+              <span className="text-sm font-medium">Search</span>
+              <span className="text-xs text-gray-500 mt-1">
+                Find in history
+              </span>
+            </Card>
+          </div>
+          {/* <div>
             <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="">
               <Card
                 className="p-6 flex flex-col items-center justify-center text-center hover:shadow-lg cursor-pointer transition-all duration-200 hover:scale-105 border-2 hover:border-blue-200"
                 onClick={handleShareLink}
@@ -324,7 +562,7 @@ const ActiveClipBoard: React.FC = () => {
               </Card>
 
               <Card
-                className="p-6 flex flex-col items-center justify-center text-center hover:shadow-lg cursor-pointer transition-all duration-200 hover:scale-105 border-2 hover:border-pink-200"
+                className="p-6  flex flex-col items-center justify-center text-center hover:shadow-lg cursor-pointer transition-all duration-200 hover:scale-105 border-2 hover:border-pink-200"
                 onClick={handleSearch}
               >
                 <Search className="h-6 w-6 mb-3 text-pink-500" />
@@ -334,15 +572,15 @@ const ActiveClipBoard: React.FC = () => {
                 </span>
               </Card>
             </div>
-          </div>
+          </div> */}
         </CardContent>
       </Card>
 
       {/* Modal Overlay with Blur Effect */}
-      {(showShareDialog || showNoteDialog || showSearchDialog) && (
+      {showSearchDialog && (
         <div className="absolute inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           {/* Share Dialog */}
-          {showShareDialog && (
+          {/* {showShareDialog && (
             <Card className="w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
               <CardHeader className="flex flex-row items-center justify-between border-b">
                 <CardTitle className="text-lg">
@@ -378,10 +616,10 @@ const ActiveClipBoard: React.FC = () => {
                 </div>
               </CardContent>
             </Card>
-          )}
+          )} */}
 
           {/* Note Dialog */}
-          {showNoteDialog && (
+          {/* {showNoteDialog && (
             <Card className="w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
               <CardHeader className="flex flex-row items-center justify-between border-b">
                 <CardTitle className="text-lg">Save as Note</CardTitle>
@@ -404,6 +642,18 @@ const ActiveClipBoard: React.FC = () => {
                     placeholder="Enter note title..."
                     value={noteTitle}
                     onChange={(e) => setNoteTitle(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700 mb-2 block">
+                    Tags (comma-separated)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="work, code, important..."
+                    value={noteTags}
+                    onChange={(e) => setNoteTags(e.target.value)}
                     className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
                 </div>
@@ -434,7 +684,7 @@ const ActiveClipBoard: React.FC = () => {
                 </div>
               </CardContent>
             </Card>
-          )}
+          )} */}
 
           {/* Search Dialog */}
           {showSearchDialog && (
@@ -467,19 +717,35 @@ const ActiveClipBoard: React.FC = () => {
                       className="p-3 border rounded-lg cursor-pointer hover:bg-blue-50 transition-colors"
                       onClick={() => {
                         setClipboardContent(item.content);
+                        setSelectedType(item.content_type);
                         setShowSearchDialog(false);
                         setSearchQuery("");
                       }}
                     >
+                      <div className="flex items-center gap-2 mb-1">
+                        {(() => {
+                          const typeConfig = contentTypes.find(
+                            (t) => t.value === item.content_type
+                          );
+                          const IconComponent = typeConfig?.icon || Type;
+                          return (
+                            <IconComponent
+                              className={`h-4 w-4 ${
+                                typeConfig?.color || "text-gray-500"
+                              }`}
+                            />
+                          );
+                        })()}
+                        <Badge variant="outline" className="text-xs">
+                          {item.content_type}
+                        </Badge>
+                      </div>
                       <div className="text-sm font-medium truncate">
                         {item.content}
                       </div>
                       <div className="text-xs text-gray-500 mt-1">
-                        {item.timestamp.toLocaleString()} • {item.device}
+                        {item.created_at.toLocaleString()} • {item.device_name}
                       </div>
-                      <Badge variant="outline" className="text-xs mt-1">
-                        {item.type}
-                      </Badge>
                     </div>
                   ))}
                   {searchQuery && searchResults.length === 0 && (
