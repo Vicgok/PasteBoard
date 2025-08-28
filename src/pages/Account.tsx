@@ -16,7 +16,6 @@ import {
 } from "@/components/shadcn_ui/avatar";
 import { Upload, Camera, ArrowLeft } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
-import Logo from "@/components/custom_ui/Logo";
 import { Skeleton } from "@/components/shadcn_ui/skeleton";
 
 const Account = () => {
